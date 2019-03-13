@@ -1,0 +1,177 @@
+#!/usr/bin/env python
+
+import os
+import ddb
+import subprocess
+from StringIO import StringIO
+import logging
+from ansible.module_utils.basic import AnsibleModule
+
+ANSIBLE_METADATA = {
+    'metadata_version': '1.1',
+    'status': ['preview'],
+    'supported_by': 'community'
+}
+
+DOCUMENTATION = '''
+---
+module: ddb
+
+short_description: This allows you to query supported EM files
+
+version_added: "0.1"
+
+description:
+    - "This module allows you to query various EM files. See documentation for listed files."
+
+options:
+    name:
+        description:
+            - This is the message to send to the sample module
+        required: true
+    new:
+        description:
+            - Control to demo if the result of this module is changed or not
+        required: false
+
+extends_documentation_fragment:
+    - azure
+
+author:
+    - Your Name (@yourhandle)
+'''
+
+EXAMPLES = '''
+# Pass in a message
+- name: Test with a message
+  my_new_test_module:
+    name: hello world
+
+# pass in a message and have changed true
+- name: Test with a message and changed output
+  my_new_test_module:
+    name: hello world
+    new: true
+
+# fail the module
+- name: Test failure of the module
+  my_new_test_module:
+    name: fail me
+'''
+
+RETURN = '''
+original_message:
+    description: The original name param that was passed in
+    type: str
+message:
+    description: The output message that the sample module generates
+'''
+
+
+def run_module():
+    def prepare__dir():
+        
+        if not os.path.isdir(_dir):
+            os.mkdir(_dir)
+        
+        if not os.path.isdir('{}/.svn'.format(_dir)):
+            svn_checkout = ['svn', 'co', '--depth', 'empty'] + svn_auth_args + [_url, _dir]
+            run_command(svn_checkout)
+        
+        for f in os.listdir(_dir):
+            f_path = '{}/{}'.format(_dir, f)
+            if not f.startswith('.') and os.path.isfile(f_path):
+                os.remove(f_path)
+        # pull the one we care about.
+        svn_up = ['svn', 'up'] + svn_auth_args + [table_path]
+        run_command(svn_up)
+
+    def run_command(args):
+        logging.info('trying {}'.format(args))
+        try:
+            command_line_process = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+
+            process_output, _ = command_line_process.communicate()
+
+            logging.info(process_output)
+        except (OSError, subprocess.CalledProcessError) as exception:
+            logging.error('Exception occured: ' + str(exception))
+            logging.error('Subprocess failed')
+            return False
+        else:
+            # no exception was raised
+            logging.info('Subprocess finished')
+
+    def run_query():
+        engine = ddb.engine(mode='object')
+        engine.define_table(table_name=em_table,
+                            database_name='etmeta',
+                            field_delimiter=':',
+                            columns=table_columns,
+                            data_file=table_path)
+
+        query = "use main; SELECT * FROM {} WHERE {}={}"
+        query = query.format(em_table,
+                             match_field,
+                             match_string)
+        logging.debug(_table)
+        logging.debug(table_columns)
+        logging.debug(table_path)
+        logging.debug(query)
+
+        results = engine.query(query)
+        logging.debug(results.data)
+        return results.data
+
+    module_args = {
+        '_user': {'type': 'str', 'required': True},
+        '_pass': {'type': 'str', 'required': True, 'no_log': True},
+        '_table': {'type': 'str', 'required': True},
+        'match_field': {'type': 'str', 'required': True},
+        'match_string': {'type': 'str', 'required': True},
+        '_dir': {'type': 'str', 'required': True},
+        '_url': {'type': 'str',
+                       'required': False,
+                       'default': 'url'}}
+
+    etmeta_columns = {'machines': ['node', 'description', 'metagroup', 'workgroup', 'interface', 'master', 'os', 'processor']}
+
+    module = AnsibleModule(argument_spec=module_args,
+                           supports_check_mode=True)
+
+    _table = module.params['_table']
+    table_columns = etmeta_columns[_table]
+    a_dir = os.path.abspath(module.params['_dir'])
+    table_path = os.path.abspath('{}/{}'.format(_dir,_table))
+    match_field = module.params['match_field']
+    match_string = module.params['match_string']
+    meta_url = module.params['_url']
+
+    svn_auth_args = ['--username',
+                     module.params['_user'],
+                     '--password',
+                     module.params['_pass'],
+                     '--trust-server-cert',
+                     '--non-interactive',
+                     '--no-auth-cache']
+
+    prepare_etmeta_dir()
+    data = run_query()
+    result = {'changed': 'false',
+              'data': data}
+
+    if module.check_mode:
+        # if the module is running in check mode, don't make a change
+        return result
+
+    # in the event of a successful module execution, you will want to
+    # simple AnsibleModule.exit_json(), passing the key/value results
+    module.exit_json(**result)
+
+
+if __name__ == '__main__':
+    run_module()
